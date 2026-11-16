@@ -1,0 +1,268 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#101827">
+<title>LinkChat - Converse por link</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;background:#101827;color:#fff;
+ font-family:Arial,sans-serif;min-height:100vh;
+ display:flex;justify-content:center;align-items:center;
+ padding:18px
+}
+.app{
+ width:100%;max-width:480px;background:#192538;
+ border:1px solid #293951;border-radius:20px;
+ padding:24px;box-shadow:0 15px 50px #0005
+}
+.logo{font-size:30px;font-weight:bold;color:#48d6b0}
+.sub{color:#aab8ca;font-size:14px;margin:8px 0 25px}
+input{
+ width:100%;padding:15px;border:1px solid #40516a;
+ background:#101c2d;color:white;border-radius:10px;
+ font-size:16px;margin:8px 0 14px;outline:none
+}
+button{
+ width:100%;padding:15px;border:0;border-radius:10px;
+ background:#35c9a3;color:#09251f;font-weight:bold;
+ font-size:16px;cursor:pointer;margin:5px 0
+}
+button.secondary{background:#30435c;color:white}
+button:disabled{opacity:.5}
+#chat{display:none}
+#messages{
+ height:48vh;min-height:260px;max-height:440px;
+ overflow-y:auto;background:#101c2d;border-radius:12px;
+ padding:12px;margin:15px 0
+}
+.message{padding:10px 12px;background:#263850;
+ border-radius:10px;margin:8px 0;overflow-wrap:anywhere}
+.message.mine{background:#145b50}
+.author{font-size:12px;color:#50dcb7;font-weight:bold;margin-bottom:5px}
+.time{font-size:10px;color:#9eacc0;margin-top:5px}
+.sendrow{display:flex;gap:8px}
+.sendrow input{flex:1;min-width:0}
+.sendrow button{width:75px;flex-shrink:0}
+#status{font-size:12px;color:#aab8ca;margin:12px 0}
+#roomInfo{font-size:12px;color:#aab8ca;overflow-wrap:anywhere}
+.hidden{display:none}
+</style>
+</head>
+
+<body>
+<div class="app">
+
+<div class="logo">LinkChat.</div>
+<div class="sub">Sua conversa. Seu link. Sem complicação.</div>
+
+<section id="home">
+ <label>Seu apelido</label>
+ <input id="nickname" maxlength="25" placeholder="Como quer ser chamado?">
+ <button id="createBtn">＋ Criar nova conversa</button>
+ <div id="invite" class="hidden">
+  <p>Você recebeu um convite para conversar!</p>
+  <button id="joinBtn">Entrar na conversa</button>
+ </div>
+ <div id="status">Conectando ao servidor...</div>
+</section>
+
+<section id="chat">
+ <div id="roomInfo"></div>
+ <button class="secondary" id="copyBtn">Copiar link da conversa</button>
+ <div id="messages"></div>
+ <div class="sendrow">
+  <input id="messageInput" maxlength="2000" placeholder="Digite sua mensagem...">
+  <button id="sendBtn">Enviar</button>
+ </div>
+ <button class="secondary" id="leaveBtn">Sair da conversa</button>
+</section>
+
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/13.3.0/firebase-app.js";
+
+import {
+ getAuth, signInAnonymously
+} from "https://www.gstatic.com/firebasejs/13.3.0/firebase-auth.js";
+
+import {
+ getDatabase, ref, push, set, onChildAdded,
+ query, orderByChild, limitToLast, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/13.3.0/firebase-database.js";
+
+const firebaseConfig = {
+ apiKey: "AIzaSyAE356-557udsTmZZIIqnlhRSBGakYMcEg",
+ authDomain: "linkchat-linkchat.firebaseapp.com",
+ databaseURL: "https://linkchat-linkchat-default-rtdb.firebaseio.com",
+ projectId: "linkchat-linkchat",
+ storageBucket: "linkchat-linkchat.firebasestorage.app",
+ messagingSenderId: "753553081256",
+ appId: "1:753553081256:web:5d3d6ebc80214dc004d39d"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getDatabase(app);
+
+const $ = id => document.getElementById(id);
+
+let user = null;
+let roomId = null;
+let nickname = "";
+let stopMessages = null;
+
+const params = new URLSearchParams(location.search);
+const invitedRoom = params.get("s");
+
+function randomRoomId(){
+ const bytes = new Uint8Array(24);
+ crypto.getRandomValues(bytes);
+ return Array.from(bytes,b => b.toString(16).padStart(2,"0")).join("");
+}
+
+function showStatus(message){
+ $("status").textContent = message;
+}
+
+async function connect(){
+ try{
+  const result = await signInAnonymously(auth);
+  user = result.user;
+  showStatus("Conectado! Você já pode conversar.");
+ }catch(error){
+  console.error(error);
+  showStatus("Erro ao conectar: " + error.message);
+ }
+}
+
+function getNickname(){
+ const name = $("nickname").value.trim();
+ if(!name){
+  alert("Digite seu apelido primeiro.");
+  return null;
+ }
+ nickname = name;
+ return name;
+}
+
+async function enterRoom(id){
+ if(!user){
+  alert("Aguarde a conexão com o servidor.");
+  return;
+ }
+ if(!getNickname()) return;
+
+ roomId = id;
+ $("home").style.display = "none";
+ $("chat").style.display = "block";
+ $("roomInfo").textContent = "Sala: " + roomId.slice(0,12) + "...";
+ $("messages").innerHTML = "";
+ history.replaceState(null,"",location.pathname + "?s=" + roomId);
+
+ const messagesRef = query(
+  ref(db,"rooms/" + roomId + "/messages"),
+  orderByChild("createdAt"),
+  limitToLast(100)
+ );
+
+ stopMessages = onChildAdded(messagesRef,snapshot=>{
+  const data = snapshot.val();
+  if(!data) return;
+  displayMessage(data);
+ });
+}
+
+function displayMessage(data){
+ const box = document.createElement("div");
+ box.className = "message" + (data.uid === user.uid ? " mine" : "");
+
+ const author = document.createElement("div");
+ author.className = "author";
+ author.textContent = data.nickname || "Participante";
+
+ const content = document.createElement("div");
+ content.textContent = data.text || "";
+
+ const time = document.createElement("div");
+ time.className = "time";
+ time.textContent = data.createdAt
+  ? new Date(data.createdAt).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})
+  : "Enviando...";
+
+ box.append(author,content,time);
+ $("messages").appendChild(box);
+ $("messages").scrollTop = $("messages").scrollHeight;
+}
+
+async function sendMessage(){
+ const input = $("messageInput");
+ const text = input.value.trim();
+ if(!text || !roomId || !user) return;
+
+ input.value = "";
+ $("sendBtn").disabled = true;
+
+ try{
+  const messageRef = push(ref(db,"rooms/" + roomId + "/messages"));
+  await set(messageRef,{
+   uid:user.uid,
+   nickname:nickname,
+   text:text,
+   createdAt:serverTimestamp()
+  });
+ }catch(error){
+  alert("Não foi possível enviar: " + error.message);
+  input.value = text;
+ }
+ $("sendBtn").disabled = false;
+ input.focus();
+}
+
+$("createBtn").addEventListener("click",()=>{
+ if(!getNickname()) return;
+ enterRoom(randomRoomId());
+});
+
+$("joinBtn").addEventListener("click",()=>{
+ if(invitedRoom) enterRoom(invitedRoom);
+});
+
+$("sendBtn").addEventListener("click",sendMessage);
+
+$("messageInput").addEventListener("keydown",event=>{
+ if(event.key === "Enter") sendMessage();
+});
+
+$("copyBtn").addEventListener("click",async()=>{
+ try{
+  await navigator.clipboard.writeText(location.href);
+  alert("Link copiado! Compartilhe com quem quiser.");
+ }catch(error){
+  prompt("Copie seu link:",location.href);
+ }
+});
+
+$("leaveBtn").addEventListener("click",()=>{
+ if(stopMessages) stopMessages();
+ stopMessages = null;
+ roomId = null;
+ $("chat").style.display = "none";
+ $("home").style.display = "block";
+ history.replaceState(null,"",location.pathname);
+ $("messages").innerHTML = "";
+});
+
+connect();
+
+if(invitedRoom && /^[a-f0-9]{48}$/.test(invitedRoom)){
+ $("invite").classList.remove("hidden");
+}
+</script>
+</body>
+</html>
